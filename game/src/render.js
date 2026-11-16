@@ -104,6 +104,7 @@ export class Renderer {
     ctx.drawImage(this.mask, 0, 0);
     this.drawGlowInDark(dt);
     this.drawParticles();
+    this.drawFloaters();
     ctx.restore();
     // Red flash on catch, drawn over everything.
     if (g.flash > 0) {
@@ -121,23 +122,34 @@ export class Renderer {
     const c = this.sceneCtx;
     if (this.caveWorld !== g.world) this.buildCaveCache();
     c.drawImage(this.caveCache, 0, 0);
-    // Pearls: bright cyan orbs with a halo, bobbing gently.
+    // Pearls: bright cyan orbs with a halo, bobbing gently. The one
+    // golden pearl per level glows gold, bigger, with a ring.
     for (const pearl of g.pearls) {
       if (pearl.taken) continue;
       const bob = Math.sin(this.t * 2 + pearl.bob) * 3;
       const pulse = 0.75 + Math.sin(this.t * 3 + pearl.bob) * 0.25;
-      const grad = c.createRadialGradient(pearl.x, pearl.y + bob, 1, pearl.x, pearl.y + bob, 26);
-      grad.addColorStop(0, `rgba(142,247,255,${0.85 * pulse})`);
-      grad.addColorStop(0.4, `rgba(142,247,255,${0.25 * pulse})`);
-      grad.addColorStop(1, 'rgba(142,247,255,0)');
+      const haloR = pearl.golden ? 34 : 26;
+      const coreR = pearl.golden ? 6 : 5;
+      const glow = pearl.golden ? '255,215,106' : '142,247,255';
+      const grad = c.createRadialGradient(pearl.x, pearl.y + bob, 1, pearl.x, pearl.y + bob, haloR);
+      grad.addColorStop(0, `rgba(${glow},${0.85 * pulse})`);
+      grad.addColorStop(0.4, `rgba(${glow},${0.25 * pulse})`);
+      grad.addColorStop(1, `rgba(${glow},0)`);
       c.fillStyle = grad;
       c.beginPath();
-      c.arc(pearl.x, pearl.y + bob, 26, 0, Math.PI * 2);
+      c.arc(pearl.x, pearl.y + bob, haloR, 0, Math.PI * 2);
       c.fill();
-      c.fillStyle = '#dffbff';
+      c.fillStyle = pearl.golden ? '#fff3c4' : '#dffbff';
       c.beginPath();
-      c.arc(pearl.x, pearl.y + bob, 5, 0, Math.PI * 2);
+      c.arc(pearl.x, pearl.y + bob, coreR, 0, Math.PI * 2);
       c.fill();
+      if (pearl.golden) {
+        c.strokeStyle = `rgba(255,215,106,${0.7 * pulse})`;
+        c.lineWidth = 2;
+        c.beginPath();
+        c.arc(pearl.x, pearl.y + bob, 11 + Math.sin(this.t * 3) * 1.5, 0, Math.PI * 2);
+        c.stroke();
+      }
     }
     // The gate: a stone arch, green when open, dull iron when shut.
     const gate = g.gate;
@@ -275,15 +287,18 @@ export class Renderer {
       m.arc(ring.x, ring.y, ring.r, 0, Math.PI * 2);
       m.stroke();
     }
-    // Pearls shimmer through the dark so the hunt stays fair.
+    // Pearls shimmer through the dark so the hunt stays fair; the
+    // golden one shines farther.
     for (const pearl of g.pearls) {
       if (pearl.taken) continue;
-      const grad = m.createRadialGradient(pearl.x, pearl.y, 2, pearl.x, pearl.y, 52);
-      grad.addColorStop(0, 'rgba(255,255,255,0.5)');
+      const shimmerR = pearl.golden ? 64 : 52;
+      const shimmerA = pearl.golden ? 0.7 : 0.5;
+      const grad = m.createRadialGradient(pearl.x, pearl.y, 2, pearl.x, pearl.y, shimmerR);
+      grad.addColorStop(0, `rgba(255,255,255,${shimmerA})`);
       grad.addColorStop(1, 'rgba(255,255,255,0)');
       m.fillStyle = grad;
       m.beginPath();
-      m.arc(pearl.x, pearl.y, 52, 0, Math.PI * 2);
+      m.arc(pearl.x, pearl.y, shimmerR, 0, Math.PI * 2);
       m.fill();
     }
     // The open gate calls the diver home.
@@ -352,6 +367,21 @@ export class Renderer {
     c.restore();
   }
 
+  // Rising score popups: the number a pickup just paid, in world space.
+  drawFloaters() {
+    const c = this.ctx;
+    c.save();
+    c.textAlign = 'center';
+    c.textBaseline = 'middle';
+    c.font = '700 21px system-ui, sans-serif';
+    for (const f of this.game.floaters) {
+      c.globalAlpha = Math.max(0, Math.min(1, f.life / f.maxLife));
+      c.fillStyle = f.color;
+      c.fillText(f.text, f.x, f.y);
+    }
+    c.restore();
+  }
+
   drawVignette() {
     const c = this.ctx;
     const grad = c.createRadialGradient(
@@ -397,6 +427,11 @@ export class Renderer {
     c.fillText(`◆ ${g.pearlsTaken}/${g.pearlsTotal} pearls`, 140, 27);
     c.fillText(`◉ ${g.chimes} chimes`, 300, 27);
     c.fillText(`LEVEL ${g.level}`, 460, 27);
+    if (g.combo.multiplier > 1) {
+      c.fillStyle = '#ffd76a';
+      c.fillText(`STREAK ×${g.combo.multiplier}`, 600, 27);
+      c.fillStyle = COLORS.hud;
+    }
     c.textAlign = 'right';
     c.fillText(`SCORE ${g.score}`, VIEW_W - 24, 27);
     c.textAlign = 'left';

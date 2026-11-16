@@ -9,7 +9,10 @@ listens. You are a diver with a small lantern in a pitch-black flooded
 cave. Every ping, footstep and dash is a sound, and the blind hunters
 come to sound. Collect every pearl to open the gate, reach it, and dive
 deeper. Louder you are, the more they hear: a ping lights the cave and
-rings the dinner bell at the same time.
+rings the dinner bell at the same time. Pearls taken while nothing hunts
+build a silent streak that multiplies their points, up to x4 — the moment
+anything hunts, the streak breaks. One pearl per level is golden and hides
+farthest from the start: it pays 300 base points instead of 100.
 
 ## Run it
 

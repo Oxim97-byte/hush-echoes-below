@@ -6,6 +6,7 @@ import {
   VIEW_H,
   TILE,
   COLS,
+  ROWS,
   PLAYER_RADIUS,
   WALK_SPEED,
   DASH_SPEED,
@@ -20,17 +21,21 @@ import {
   CHIME_LOUDNESS,
   CHIME_PULSES,
   CHIME_PULSE_GAP,
+  SUSPICION_TIME,
   PEARLS_BASE,
   PEARLS_CAP,
   CHIMES_BASE,
   LEVEL_SEED,
   PEARL_SCORE,
+  GOLDEN_PEARL_SCORE,
   SILENT_BONUS,
+  STREAK_MAX_MULT,
   LEVEL_CLEAR_SCORE,
 } from './config.js';
 import { World } from './world.js';
 import { SoundField } from './soundfield.js';
 import { Enemy, spawnEnemies, moveCircle } from './enemies.js';
+import { SilentStreak } from './combo.js';
 import { makeRng } from './rng.js';
 
 export class Game {
@@ -59,6 +64,8 @@ export class Game {
     this.demoTimer = 0;
     this.rings = []; // visible sonar rings: {x, y, r, maxR, life}
     this.particles = [];
+    this.floaters = []; // rising score popups: {x, y, text, color, life, maxLife}
+    this.combo = new SilentStreak(STREAK_MAX_MULT);
     this.chimeStones = []; // travelling stones: {x, y, tx, ty, pulses, timer}
     this.loadLevel(1, LEVEL_SEED(1));
     this.resetRun();
@@ -98,9 +105,21 @@ export class Game {
       }
       used.add(tile.y * 40 + tile.x);
       const c = this.world.tileCenter(tile.x, tile.y);
-      this.pearls.push({ x: c.x, y: c.y, taken: false, bob: this.rng.range(0, 6.28) });
+      this.pearls.push({ x: c.x, y: c.y, taken: false, golden: false, bob: this.rng.range(0, 6.28) });
     }
     this.pearlsTotal = pearlCount;
+    // One golden pearl per level: the farthest from the spawn — the
+    // hardest to reach, the richest to take.
+    let golden = this.pearls[0];
+    let goldenD = -1;
+    for (const p of this.pearls) {
+      const d = Math.hypot(p.x - sc.x, p.y - sc.y);
+      if (d > goldenD) {
+        goldenD = d;
+        golden = p;
+      }
+    }
+    if (golden) golden.golden = true;
     // The gate waits at the open tile farthest from the spawn.
     const far = this.world.farthestFrom(useTile.x, useTile.y);
     const gc = this.world.tileCenter(far.x, far.y);
@@ -112,6 +131,8 @@ export class Game {
     this.rings = [];
     this.chimeStones = [];
     this.particles = [];
+    this.floaters = [];
+    this.combo.reset();
   }
 
   resetRun() {
@@ -122,6 +143,7 @@ export class Game {
     this.flash = 0;
     this.shake = 0;
     this.message = null;
+    this.combo.reset();
   }
 
   // --- demo states for screenshots: ?demo=title|play|hunt|clear|over ---
@@ -145,10 +167,14 @@ export class Game {
     if (this.demo === 'title') {
       this.state = 'title';
       this.demoTimer = 0;
+      // A ping already out when the shot is taken: the cave shows
+      // through the menu instead of flat black.
+      this.emitPing(VIEW_W / 2, VIEW_H * 0.62, true);
     } else if (this.demo === 'play') {
       this.state = 'play';
-      // A vista: the open tile with the most open water around it, so
-      // the cover shot shows a real cavern, not a corner pocket.
+      // A vista near the middle of the screen, with the most open water
+      // around it, so the cover shot is a real cavern at a glance — not
+      // a corner pocket with three quarters of black frame.
       let vista = this.spawnTile;
       let vistaScore = -1;
       for (const t of this.world.openTiles) {
@@ -160,17 +186,75 @@ export class Game {
             if (!this.world.isWall(tx + dx, ty + dy)) open++;
           }
         }
-        if (open > vistaScore) {
-          vistaScore = open;
+        if (open > vistaScore) vistaScore = open;
+      }
+      let vistaCenter = Infinity;
+      for (const t of this.world.openTiles) {
+        const tx = t % COLS;
+        const ty = Math.floor(t / COLS);
+        let open = 0;
+        for (let dy = -3; dy <= 3; dy++) {
+          for (let dx = -3; dx <= 3; dx++) {
+            if (!this.world.isWall(tx + dx, ty + dy)) open++;
+          }
+        }
+        if (open < vistaScore - 4) continue;
+        const centerD = Math.abs(tx - COLS / 2) + Math.abs(ty - ROWS / 2);
+        if (centerD < vistaCenter) {
+          vistaCenter = centerD;
           vista = { x: tx, y: ty };
         }
       }
       const vc = this.world.tileCenter(vista.x, vista.y);
       this.player.x = vc.x;
       this.player.y = vc.y;
-      // Hunters start far off: they will hear the ping and converge,
-      // but none reaches the diver before the shot is taken.
-      for (const e of this.enemies) {
+      // The dive is already in progress: one pearl taken silently, the
+      // streak at x2, score to match — the cover reads as a game being
+      // played, not a game at zero. The golden pearl is moved to the
+      // nearest one still out there, so the cover shows the gold.
+      this.pearls.forEach((p) => {
+        p.golden = false;
+      });
+      let nearestGolden = null;
+      let nearestD = Infinity;
+      for (const p of this.pearls) {
+        if (p.taken) continue;
+        const d = Math.hypot(p.x - this.player.x, p.y - this.player.y);
+        if (d < nearestD) {
+          nearestD = d;
+          nearestGolden = p;
+        }
+      }
+      if (nearestGolden) nearestGolden.golden = true;
+      const staged = this.pearls.find((p) => !p.taken && !p.golden) || this.pearls[0];
+      staged.taken = true;
+      this.score = this.combo.onSilentPearl(PEARL_SCORE, SILENT_BONUS);
+      // One hunter closes in, already suspicious: put it seven tiles
+      // off, inside the ping's reach, so its body and eyes show in the
+      // lit water instead of hiding in the dark like the rest.
+      const near = this.enemies[0];
+      const ptx = Math.floor(this.player.x / TILE);
+      const pty = Math.floor(this.player.y / TILE);
+      const { dist } = this.world.distancesFrom(ptx, pty);
+      let spot = -1;
+      for (let i = 0; i < dist.length; i++) {
+        if (dist[i] >= 7 && dist[i] <= 8) {
+          spot = i;
+          break;
+        }
+      }
+      if (spot >= 0) {
+        const c = this.world.tileCenter(spot % COLS, Math.floor(spot / COLS));
+        near.x = c.x;
+        near.y = c.y;
+      }
+      near.state = 'suspicious';
+      near.targetX = this.player.x;
+      near.targetY = this.player.y;
+      near.searchTimer = SUSPICION_TIME;
+      // The rest of the hunters stay far off: they will hear the ping
+      // and converge, but none reaches the diver before the shot.
+      for (const e of this.enemies.slice(1)) {
         const tile = this.world.randomOpenFar(vista.x, vista.y, 16);
         const c = this.world.tileCenter(tile.x, tile.y);
         e.x = c.x;
@@ -178,10 +262,15 @@ export class Game {
         e.state = 'patrol';
       }
       // A ping just fired, and a chime stone already ringing by the
-      // nearest pearl: rings on the water, cave half-revealed.
+      // golden pearl: rings on the water, cave half-revealed.
       this.emitPing(this.player.x, this.player.y, true);
-      const near = this.pearls[0];
-      if (near) this.throwChime(near.x, near.y);
+      // The demo ping is light only: clear its sound so the hunters
+      // stay suspicious instead of hunting through the long setup
+      // wait. The fresh ping before the shot still rings the bell.
+      this.sound.events.length = 0;
+      const nearPearl =
+        this.pearls.find((p) => p.golden && !p.taken) || this.pearls.find((p) => !p.taken);
+      if (nearPearl) this.throwChime(nearPearl.x, nearPearl.y);
     } else if (this.demo === 'hunt') {
       this.state = 'play';
       this.emitPing(this.player.x, this.player.y, true);
@@ -299,6 +388,19 @@ export class Game {
     }
   }
 
+  // A rising score popup: feedback on every pickup, in world space.
+  addFloater(x, y, text, color) {
+    this.floaters.push({ x, y, text, color, life: 1.2, maxLife: 1.2 });
+  }
+
+  updateFloaters(dt) {
+    for (const f of this.floaters) {
+      f.life -= dt;
+      f.y -= 42 * dt; // rises as it fades
+    }
+    this.floaters = this.floaters.filter((f) => f.life > 0);
+  }
+
   // --- per-frame update --------------------------------------------
   update(dt, input) {
     this.demoTimer += dt;
@@ -347,6 +449,8 @@ export class Game {
     this.updateAmbient(dt);
     this.updatePlayer(dt, input);
     for (const enemy of this.enemies) enemy.update(dt, this);
+    // The moment anything hunts, the silent streak is gone.
+    if (this.anyHunt) this.combo.breakStreak();
     this.updateChimes(dt);
     this.updateParticles(dt);
     this.checkPearls();
@@ -363,6 +467,7 @@ export class Game {
   }
 
   updateAmbient(dt) {
+    this.updateFloaters(dt);
     // Sonar rings expand and fade; the memory they wrote fades too.
     for (const ring of this.rings) {
       ring.r += PING_RING_SPEED * dt;
@@ -453,9 +558,23 @@ export class Game {
       if (d < 26) {
         pearl.taken = true;
         const silent = !this.enemies.some((e) => e.state === 'hunt');
-        this.score += PEARL_SCORE + (silent ? SILENT_BONUS : 0);
+        const base = pearl.golden ? GOLDEN_PEARL_SCORE : PEARL_SCORE;
+        const gained = silent
+          ? this.combo.onSilentPearl(base, SILENT_BONUS)
+          : this.combo.onNoisyPearl(base);
+        this.score += gained;
         this.audio.pearl();
-        this.burst(pearl.x, pearl.y, 14, '#8ef7ff');
+        this.burst(pearl.x, pearl.y, 14, pearl.golden ? '#ffd76a' : '#8ef7ff');
+        this.addFloater(
+          pearl.x,
+          pearl.y - 20,
+          pearl.golden
+            ? `+${gained} ★`
+            : silent
+              ? `+${gained} ×${this.combo.multiplier}`
+              : `+${gained}`,
+          pearl.golden ? '#ffd76a' : silent ? '#ffd76a' : '#8ef7ff',
+        );
         const left = this.pearls.filter((q) => !q.taken).length;
         if (left === 0) {
           this.gate.open = true;
@@ -463,7 +582,11 @@ export class Game {
           this.showMessage('THE GATE IS OPEN', 'Reach the green gate — quietly', 3);
         } else {
           this.showMessage(
-            silent ? `PEARL +${PEARL_SCORE + SILENT_BONUS} — SILENT` : `PEARL +${PEARL_SCORE}`,
+            pearl.golden
+              ? `GOLDEN PEARL +${gained}`
+              : silent
+                ? `PEARL +${gained} — SILENT ×${this.combo.multiplier}`
+                : `PEARL +${gained}`,
             `${left} more to open the gate`,
             1.6,
           );

@@ -45,7 +45,9 @@ export const PEARLS_CAP = 8;
 export const CHIMES_BASE = 3;
 export const LEVEL_SEED = (level) => 1000 + level * 77;
 export const PEARL_SCORE = 100;
+export const GOLDEN_PEARL_SCORE = 300; // the one golden pearl per level
 export const SILENT_BONUS = 50; // pearl taken while nothing hunts
+export const STREAK_MAX_MULT = 4; // silent-streak multiplier cap (x1..x4)
 export const LEVEL_CLEAR_SCORE = 250;
 
 // --- palette: phosphor on black water ---
