@@ -189,7 +189,9 @@ export class Renderer {
       c.stroke();
     }
     // Enemies: eel bodies with a fading tail, coloured by kind.
-    for (const e of g.enemies) {
+    // Not on the title screen: their bodies read as stray "!" markers
+    // through the menu (the demo ping lights the cave behind it).
+    for (const e of g.state === 'title' ? [] : g.enemies) {
       for (let i = 0; i < e.tail.length; i++) {
         const seg = e.tail[i];
         c.fillStyle = e.color;

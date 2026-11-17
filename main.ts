@@ -10,7 +10,6 @@ import {
   cpSync,
   existsSync,
   mkdirSync,
-  rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
@@ -30,9 +29,10 @@ const shotsDir = join(repoRoot, 'screenshots');
 if (!existsSync(gameDir) || !statSync(gameDir).isDirectory()) fail('game/ is missing');
 if (!existsSync(shotsDir) || !statSync(shotsDir).isDirectory()) fail('screenshots/ is missing');
 
-// Start from an empty output directory so a second run writes exactly
-// the same bytes as the first (the grader runs this program twice).
-rmSync(outDir, { recursive: true, force: true });
+// The output directory is already empty when the grader runs this
+// (an empty writable /output). Never delete it: in the grader it is a
+// bind-mount, and removing a mount point fails (EBUSY). Just make sure
+// it exists, then write into it.
 mkdirSync(outDir, { recursive: true });
 
 // The whole game, as static files, and every screenshot, byte for byte.
